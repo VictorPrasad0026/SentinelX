@@ -1,9 +1,19 @@
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 
 from collectors.subdomain_sources.crtsh import (
     get_ct_subdomains
 )
+
+from collectors.subdomain_sources.certspotter import (
+    get_certspotter
+)
+
+from collectors.subdomain_sources.alienvault_otx import (
+    get_otx_subdomains
+)
+
 
 from collectors.subdomain_sources.dns_bruteforce import (
     brute_force,
@@ -28,28 +38,48 @@ from collectors.subdomain_sources.recursive import (
 
 
 
+
+
+# -------------------------------------------------
+# DNS enrichment
+# -------------------------------------------------
+
 def enrich_hosts(hosts, source):
 
-    results = []
+
+    results=[]
 
 
     for host in hosts:
 
+
         try:
 
-            data = resolve(host)
+
+            data=resolve(host)
+
 
 
             if data:
 
-                data["source"] = source
+
+                data["source"]=source
+
+
+                data.pop(
+                    "sources",
+                    None
+                )
+
 
                 results.append(data)
 
 
+
         except Exception:
 
-            pass
+            continue
+
 
 
     return results
@@ -58,43 +88,85 @@ def enrich_hosts(hosts, source):
 
 
 
+
+
+# -------------------------------------------------
+# Merge assets
+# -------------------------------------------------
+
 def merge_results(final, items):
 
 
     for item in items:
 
-        host = item["host"]
+
+        host=item.get(
+            "host"
+        )
+
+
+        if not host:
+
+            continue
+
+
 
 
         if host in final:
 
+
+
             if "sources" not in final[host]:
 
-                final[host]["sources"] = [
-                    final[host].get("source")
+
+                final[host]["sources"]=[
+
+                    final[host].get(
+                        "source"
+                    )
+
                 ]
 
 
-            final[host]["sources"].append(
-                item.get("source")
+
+
+            source=item.get(
+                "source"
             )
+
+
+
+            if source and source not in final[host]["sources"]:
+
+
+                final[host]["sources"].append(
+                    source
+                )
+
 
 
         else:
 
-            final[host] = item
+
+            final[host]=item
 
 
 
 
+
+
+
+# -------------------------------------------------
+# Main Engine
+# -------------------------------------------------
 
 def get_subdomains(domain):
 
 
-    result = {
+    result={
 
 
-        "domain": domain,
+        "domain":domain,
 
 
         "timestamp":
@@ -102,10 +174,14 @@ def get_subdomains(domain):
 
 
 
-        "discovery": {
+        "discovery":{
 
 
             "crtsh":0,
+
+            "certspotter":0,
+
+            "otx":0,
 
             "dns_bruteforce":0,
 
@@ -131,91 +207,281 @@ def get_subdomains(domain):
 
 
 
-    final = {}
+
+    final={}
 
 
 
 
-
-    #
+    # -----------------------------
     # Wildcard
-    #
+    # -----------------------------
 
-    print("[+] Checking wildcard DNS")
-
-
-    try:
-
-        result["wildcard_dns"] = check_wildcard(domain)
-
-    except Exception:
-
-        result["wildcard_dns"] = False
-
-
-
-
-
-    #
-    # CRT.SH
-    #
-
-    print("[+] Certificate Transparency scan")
+    print(
+        "[+] Checking wildcard DNS"
+    )
 
 
     try:
 
-        ct_hosts = get_ct_subdomains(domain)
+        result["wildcard_dns"]=check_wildcard(
+            domain
+        )
 
 
     except Exception:
 
-        ct_hosts=set()
-
-
-
-    result["discovery"]["crtsh"] = len(ct_hosts)
+        result["wildcard_dns"]=False
 
 
 
 
 
 
-
-    #
-    # DNS Bruteforce
-    #
-
-    print("[+] DNS enumeration")
+    # -----------------------------
+    # Parallel Discovery
+    # -----------------------------
 
 
-    try:
-
-        brute_results = brute_force(domain)
-
-
-        for item in brute_results:
-
-            item["source"]="dns_bruteforce"
-
-
-    except Exception:
-
-        brute_results=[]
+    print(
+        "[+] Starting passive discovery"
+    )
 
 
 
-    result["discovery"]["dns_bruteforce"] = len(
+    with ThreadPoolExecutor(
+        max_workers=6
+    ) as executor:
+
+
+
+        tasks={
+
+
+            "crtsh":
+
+            executor.submit(
+
+                get_ct_subdomains,
+
+                domain
+
+            ),
+
+
+
+            "certspotter":
+
+            executor.submit(
+
+                get_certspotter,
+
+                domain
+
+            ),
+
+
+
+
+            "otx":
+
+            executor.submit(
+
+                get_otx_subdomains,
+
+                domain
+
+            ),
+
+
+
+
+            "brute":
+
+            executor.submit(
+
+                brute_force,
+
+                domain
+
+            ),
+
+
+
+
+            "recursive":
+
+            executor.submit(
+
+                recursive_discovery,
+
+                domain
+
+            ),
+
+
+
+
+            "zone":
+
+            executor.submit(
+
+                check_zone_transfer,
+
+                domain
+
+            )
+
+        }
+
+
+
+        outputs={}
+
+
+
+        for name,future in tasks.items():
+
+
+            try:
+
+
+                outputs[name]=future.result()
+
+
+
+            except Exception as e:
+
+
+                print(
+                    f"[{name}] ERROR:",
+                    e
+                )
+
+
+                outputs[name]=[]
+
+
+
+
+
+
+    # -----------------------------
+    # Extract results
+    # -----------------------------
+
+
+    ct_hosts=set(
+        outputs.get(
+            "crtsh",
+            []
+        )
+    )
+
+
+
+    cert_hosts=set(
+        outputs.get(
+            "certspotter",
+            []
+        )
+    )
+
+
+
+    otx_hosts=set(
+        outputs.get(
+            "otx",
+            []
+        )
+    )
+
+
+
+    brute_results=outputs.get(
+        "brute",
+        []
+    )
+
+
+
+    recursive_hosts=set(
+        outputs.get(
+            "recursive",
+            []
+        )
+    )
+
+
+
+    zone_hosts=set(
+        outputs.get(
+            "zone",
+            []
+        )
+    )
+
+
+
+
+
+    result["discovery"]["crtsh"]=len(
+        ct_hosts
+    )
+
+
+    result["discovery"]["certspotter"]=len(
+        cert_hosts
+    )
+
+
+    result["discovery"]["otx"]=len(
+        otx_hosts
+    )
+
+
+
+    result["discovery"]["dns_bruteforce"]=len(
         brute_results
     )
 
 
 
+    result["discovery"]["recursive"]=len(
+        recursive_hosts
+    )
+
+
+    result["discovery"]["zone_transfer"]=len(
+        zone_hosts
+    )
+
+
+
+
+
+
+
+    # -----------------------------
+    # DNS brute force tagging
+    # -----------------------------
+
+    for item in brute_results:
+
+        item["source"]="dns_bruteforce"
+
+
+
+
+
     brute_hosts={
+
 
         x["host"]
 
         for x in brute_results
+
+        if "host" in x
 
     }
 
@@ -225,18 +491,26 @@ def get_subdomains(domain):
 
 
 
-    #
-    # Permutation
-    #
+    # -----------------------------
+    # Permutations
+    # -----------------------------
 
-    print("[+] Generating permutations")
+    print(
+        "[+] Generating permutations"
+    )
 
 
     try:
 
-        generated = generate_permutations(
 
-            list(ct_hosts)+list(brute_hosts),
+        generated=generate_permutations(
+
+            list(
+                ct_hosts |
+                cert_hosts |
+                otx_hosts |
+                brute_hosts
+            ),
 
             domain
 
@@ -245,12 +519,13 @@ def get_subdomains(domain):
 
     except Exception:
 
+
         generated=[]
 
 
 
 
-    permutation_results = enrich_hosts(
+    permutation_results=enrich_hosts(
 
         generated,
 
@@ -260,7 +535,7 @@ def get_subdomains(domain):
 
 
 
-    result["discovery"]["permutation"] = len(
+    result["discovery"]["permutation"]=len(
         permutation_results
     )
 
@@ -269,29 +544,12 @@ def get_subdomains(domain):
 
 
 
+    # -----------------------------
+    # Recursive enrichment
+    # -----------------------------
 
 
-    #
-    # Recursive
-    #
-
-    print("[+] Recursive discovery")
-
-
-    try:
-
-        recursive_hosts = recursive_discovery(
-            domain
-        )
-
-
-    except Exception:
-
-        recursive_hosts=set()
-
-
-
-    recursive_results = enrich_hosts(
+    recursive_results=enrich_hosts(
 
         recursive_hosts,
 
@@ -300,39 +558,16 @@ def get_subdomains(domain):
     )
 
 
-    result["discovery"]["recursive"] = len(
-        recursive_results
-    )
 
 
 
 
+    # -----------------------------
+    # Zone enrichment
+    # -----------------------------
 
 
-
-
-
-    #
-    # Zone Transfer
-    #
-
-    print("[+] Checking zone transfer")
-
-
-    try:
-
-        zone_hosts = check_zone_transfer(
-            domain
-        )
-
-
-    except Exception:
-
-        zone_hosts=set()
-
-
-
-    zone_results = enrich_hosts(
+    zone_results=enrich_hosts(
 
         zone_hosts,
 
@@ -341,21 +576,15 @@ def get_subdomains(domain):
     )
 
 
-    result["discovery"]["zone_transfer"] = len(
-        zone_results
-    )
 
 
 
 
 
+    # -----------------------------
+    # Merge
+    # -----------------------------
 
-
-
-
-    #
-    # Merge DNS resolved assets
-    #
 
     merge_results(
         final,
@@ -385,79 +614,100 @@ def get_subdomains(domain):
 
 
 
+    # -----------------------------
+    # Passive sources only
+    # -----------------------------
 
 
+    passive_sources=[
 
-    #
-    # Add CT domains
-    # Even if DNS fails
-    #
+        ("crtsh",ct_hosts),
 
-    for host in ct_hosts:
+        ("certspotter",cert_hosts),
 
+        ("otx",otx_hosts)
 
-        if host not in final:
-
-
-            final[host]={
-
-
-                "host":host,
-
-
-                "A":[],
-
-
-                "AAAA":[],
-
-
-                "CNAME":[],
-
-
-                "source":"crtsh",
-
-
-                "resolution_status":
-                "unresolved"
-
-
-            }
-
-
-        else:
-
-
-            if "sources" not in final[host]:
-
-                final[host]["sources"]=[]
-
-
-            final[host]["sources"].append(
-                "crtsh"
-            )
+    ]
 
 
 
 
+    for source,hosts in passive_sources:
+
+
+        for host in hosts:
+
+
+
+            if host not in final:
+
+
+                final[host]={
+
+
+                    "host":host,
+
+                    "A":[],
+
+                    "AAAA":[],
+
+                    "CNAME":[],
+
+                    "source":source,
+
+                    "resolution_status":
+                    "unresolved"
+
+                }
+
+
+
+            else:
+
+
+                if "sources" not in final[host]:
+
+                    final[host]["sources"]=[]
+
+
+
+                if source not in final[host]["sources"]:
+
+
+                    final[host]["sources"].append(
+                        source
+                    )
 
 
 
 
 
-    result["subdomains"] = list(
+
+
+
+    # -----------------------------
+    # Final response
+    # -----------------------------
+
+
+    result["subdomains"]=list(
         final.values()
     )
 
 
 
     result["subdomains"].sort(
+
         key=lambda x:x["host"]
+
     )
 
 
 
-    result["total_subdomains"] = len(
+    result["total_subdomains"]=len(
+
         result["subdomains"]
+
     )
 
 
@@ -470,17 +720,21 @@ def get_subdomains(domain):
 
 
 
+# -------------------------------------------------
+# Test
+# -------------------------------------------------
+
 if __name__=="__main__":
 
 
-    target=input(
+    domain=input(
         "Enter domain: "
     ).strip().lower()
 
 
 
     data=get_subdomains(
-        target
+        domain
     )
 
 
@@ -490,10 +744,12 @@ if __name__=="__main__":
     )
 
 
+
     print(
         "Total:",
         data["total_subdomains"]
     )
+
 
 
     print(
@@ -503,14 +759,25 @@ if __name__=="__main__":
 
 
 
-    print("\nSubdomains:\n")
+    print(
+        "\nSubdomains:\n"
+    )
 
 
-    for sub in data["subdomains"]:
+    for item in data["subdomains"]:
 
 
         print(
-            sub["host"],
+
+            item["host"],
+
             "=>",
-            sub.get("source")
+
+            item.get(
+                "sources",
+                item.get(
+                    "source"
+                )
+            )
+
         )

@@ -1,0 +1,9 @@
+requests>=2.31.0
+dnspython>=2.6.1
+python-dotenv>=1.0.1
+pymongo>=4.7.0
+networkx>=3.3
+pydantic>=2.7.0
+urllib3>=2.2.1
+python-dateutil>=2.9.0.post0
+pytest>=8.2.0

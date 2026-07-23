@@ -1,50 +1,53 @@
-from collectors.subdomain_intelligence import get_subdomains
-
-from collectors.subdomain_asset_enrichment import enrich_all_subdomains
-
-import json
-
-
-
-domain="github.com"
-
-
-
-print("[+] Finding subdomains")
-
-
-subs=get_subdomains(
-    domain
+from collectors.subdomain_sources.recursive import (
+    recursive_discovery
 )
 
+
+target = "github.com"
+
+
+seed_hosts = {
+
+    "api.github.com",
+
+    "docs.github.com",
+
+    "status.github.com",
+
+    "gist.github.com"
+
+}
+
+
+results = recursive_discovery(
+
+    domain=target,
+
+    seed_hosts=seed_hosts,
+
+    max_depth=1,
+
+    max_queries=4
+
+)
 
 
 print(
-    "[+] Enriching assets"
+    "\n========== RECURSIVE TEST ==========\n"
 )
 
 
-
-assets=enrich_all_subdomains(
-    subs
+print(
+    "Total discovered:",
+    len(results)
 )
 
 
-
-with open(
-    "github_asset_inventory.json",
-    "w"
-) as f:
+print()
 
 
-    json.dump(
-        assets,
-        f,
-        indent=4
+for host in sorted(results):
+
+    print(
+        host
     )
-
-
-
-print(
-    "Completed"
-)

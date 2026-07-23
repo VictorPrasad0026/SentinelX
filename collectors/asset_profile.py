@@ -1,171 +1,101 @@
 import json
 import os
+import time
 
 from datetime import datetime
-import profile
-from collectors.asset_graph import create_asset_graph
 
 
-from collectors.domain_intelligence import get_domain_info
-from collectors.dns_intelligence import get_dns_info
-from collectors.ssl_intelligence import get_ssl_info
-from collectors.subdomain_intelligence import get_subdomains
-from collectors.technology_intelligence import get_technology_info
-from collectors.csp_intelligence import analyze_csp
-from collectors.risk_engine import calculate_risk
+from collectors.infrastructure_intelligence import (
+    get_infrastructure_info
+)
 
+from collectors.email_intelligence import (
+    get_email_intelligence
+)
 
+from collectors.asset_graph import (
+    create_asset_graph
+)
 
+from collectors.domain_intelligence import (
+    get_domain_info
+)
 
-def generate_asset_profile(domain):
+from collectors.dns_intelligence import (
+    get_dns_info
+)
 
+from collectors.ssl_intelligence import (
+    get_ssl_info
+)
 
-    profile = {
+from collectors.subdomain_intelligence import (
+    get_subdomains
+)
 
+from collectors.subdomain_asset_enrichment import (
+    enrich_all_subdomains
+)
 
-        "asset": domain,
-        
+from collectors.technology_intelligence import (
+    get_technology_info
+)
 
-        "scan_metadata": {
+from collectors.csp_intelligence import (
+    analyze_csp
+)
 
+from collectors.risk_engine import (
+    calculate_risk
+)
 
-            "scan_time":
-            datetime.utcnow().isoformat(),
 
 
-            "scanner":
-            "SentinelX Asset Intelligence Engine",
 
 
-            "version":
-            "0.4"
+# ==========================================
+# SAFE COLLECTOR EXECUTION
+# ==========================================
 
+def run_collector(name, func, *args):
 
-        },
+    try:
 
+        print(f"[+] {name}")
 
-        "domain_intelligence": {},
-        "asset_graph":{},
+        start = time.time()
 
-        "dns_intelligence": {},
 
+        result = func(*args)
 
-        "ssl_intelligence": {},
 
-
-        "subdomain_intelligence": {},
-
-
-        "technology_intelligence": {},
-
-
-        "csp_intelligence": {},
-
-
-        "risk_assessment": {}
-
-    }
-
-
-
-
-    print("\n[+] Collecting Domain Intelligence")
-
-    profile["domain_intelligence"] = (
-
-        get_domain_info(domain)
-
-    )
-
-
-
-
-
-    print("[+] Collecting DNS Intelligence")
-
-    profile["dns_intelligence"] = (
-
-        get_dns_info(domain)
-
-    )
-
-
-
-
-
-    print("[+] Collecting SSL Intelligence")
-
-    profile["ssl_intelligence"] = (
-
-        get_ssl_info(domain)
-
-    )
-
-
-
-
-
-    print("[+] Discovering Subdomains")
-
-    profile["subdomain_intelligence"] = (
-
-        get_subdomains(domain)
-
-    )
-
-
-
-
-
-
-    print("[+] Fingerprinting Technologies")
-
-    technology = get_technology_info(domain)
-
-
-    profile["technology_intelligence"] = technology
-
-
-
-
-
-    print("[+] Analysing Content Security Policy")
-
-
-    csp_data = technology.get(
-        "csp_raw",
-        {}
-    )
-
-
-
-    if csp_data.get("enabled"):
-
-
-        profile["csp_intelligence"] = (
-
-            analyze_csp(
-
-                csp_data.get(
-                    "value"
-                )
-
-            )
-
+        elapsed = round(
+            time.time() - start,
+            2
         )
 
 
-    else:
+        print(
+            f"[✓] {name} completed ({elapsed}s)"
+        )
 
 
-        profile["csp_intelligence"] = {
+        return result
 
-            "enabled":False,
 
-            "risk_level":"UNKNOWN",
 
-            "message":
-            "No CSP detected"
+    except Exception as e:
+
+
+        print(
+            f"[!] {name} failed:",
+            e
+        )
+
+
+        return {
+
+            "error": str(e)
 
         }
 
@@ -175,20 +105,656 @@ def generate_asset_profile(domain):
 
 
 
-    print("[+] Calculating Security Risk")
+# ==========================================
+# ATTACK SURFACE SUMMARY
+# ==========================================
 
 
-    profile["risk_assessment"] = (
+def build_attack_surface(profile):
 
-        calculate_risk(profile)
+
+    assets = profile.get(
+        "subdomain_assets",
+        {}
+    ).get(
+        "assets",
+        []
+    )
+
+
+
+    summary = {
+
+
+        "total_subdomains":
+
+        profile.get(
+            "subdomain_intelligence",
+            {}
+        ).get(
+            "total_subdomains",
+            0
+        ),
+
+
+
+        "resolved_assets":
+
+        len(assets),
+
+
+
+        "technologies":
+
+        profile.get(
+            "technology_intelligence",
+            {}
+        ).get(
+            "technologies",
+            []
+        ),
+
+
+
+        "email_provider":
+
+        profile.get(
+            "email_intelligence",
+            {}
+        )
+        .get(
+            "mx",
+            {}
+        )
+        .get(
+            "provider"
+        ),
+
+
+
+        "email_risk":
+
+        profile.get(
+            "email_intelligence",
+            {}
+        )
+        .get(
+            "risk",
+            {}
+        )
+        .get(
+            "score"
+        ),
+
+
+
+        "waf_detected":False,
+
+
+        "invalid_ssl_assets":[],
+
+        "missing_csp_assets":[],
+        
+
+        "sensitive_assets":[]
+
+    }
+
+
+
+
+
+    for asset in assets:
+
+
+        host = asset.get(
+            "host",
+            ""
+        )
+
+
+        ssl = asset.get(
+            "ssl",
+            {}
+        )
+
+
+        http = asset.get(
+            "http",
+            {}
+        )
+
+
+        risk = asset.get(
+            "risk",
+            {}
+        )
+
+
+
+        if ssl.get(
+            "status"
+        ) != "VALID":
+
+
+            summary[
+                "invalid_ssl_assets"
+            ].append(
+                host
+            )
+
+
+
+
+            security_headers = http.get(
+                "security_headers",
+                {}
+            )
+
+
+            csp_header = security_headers.get(
+                "content-security-policy",
+                {}
+            )
+
+
+            if csp_header.get(
+                "present",
+                False
+            ) == False:
+
+
+                summary[
+                    "missing_csp_assets"
+                ].append(
+                    host
+                )
+
+            if http.get(
+                "waf",
+                {}
+            ).get(
+                "detected"
+            ):
+
+
+                summary[
+                    "waf_detected"
+                ] = True
+
+
+
+
+
+
+        for finding in risk.get(
+            "findings",
+            []
+        ):
+
+
+            if "Sensitive hostname" in finding.get(
+                "issue",
+                ""
+            ):
+
+
+                summary[
+                    "sensitive_assets"
+                ].append(
+                    host
+                )
+
+
+
+    return summary
+
+
+
+
+
+
+
+
+# ==========================================
+# MAIN ASSET PROFILE ENGINE
+# ==========================================
+
+
+def generate_asset_profile(domain):
+
+
+    start = time.time()
+
+
+
+    profile = {
+
+
+        "asset":domain,
+
+
+
+        "scan_metadata":{
+
+
+            "scan_time":
+            datetime.utcnow().isoformat()+"Z",
+
+
+            "scanner":
+            "SentinelX Asset Intelligence Engine",
+
+
+            "version":
+            "1.2"
+
+
+        },
+
+
+
+        "domain_intelligence":{},
+
+
+        "dns_intelligence":{},
+
+
+        "email_intelligence":{},
+        
+        "infrastructure_intelligence": {},
+
+
+        "ssl_intelligence":{},
+
+
+        "technology_intelligence":{},
+
+
+        "csp_intelligence":{},
+
+
+        "subdomain_intelligence":{},
+
+
+        "subdomain_assets":{},
+
+
+        "risk_assessment":{},
+
+
+        "asset_graph":{},
+
+
+        "attack_surface":{}
+
+
+    }
+
+
+
+
+
+    # Domain
+
+    profile[
+        "domain_intelligence"
+    ] = run_collector(
+
+        "Domain Intelligence",
+
+        get_domain_info,
+
+        domain
+
+    )
+
+
+
+
+
+    # DNS
+
+    profile[
+        "dns_intelligence"
+    ] = run_collector(
+
+        "DNS Intelligence",
+
+        get_dns_info,
+
+        domain
+
+    )
+
+
+
+
+
+    # Email
+
+    profile[
+        "email_intelligence"
+    ] = run_collector(
+
+        "Email Security Intelligence",
+
+        get_email_intelligence,
+
+        domain
+
+    )
+
+
+
+
+
+    # SSL
+
+    profile[
+        "ssl_intelligence"
+    ] = run_collector(
+
+        "SSL Intelligence",
+
+        get_ssl_info,
+
+        domain
 
     )
     
-    print("[+] Building Asset Relationship Graph")
+    profile["infrastructure_intelligence"] = run_collector(
+
+    "Infrastructure Intelligence",
+
+    get_infrastructure_info,
+
+    domain
+
+)
+        # ==================================
+    # Technology Intelligence
+    # ==================================
+
+    technology = run_collector(
+
+        "Technology Fingerprinting",
+
+        get_technology_info,
+
+        domain
+
+    )
 
 
-    profile["asset_graph"] = create_asset_graph(profile)
+    profile[
+        "technology_intelligence"
+    ] = technology
 
+
+
+
+
+ # ==================================
+# CSP Intelligence
+# ==================================
+
+    print("[+] CSP Analysis")
+
+
+    try:
+
+
+        csp_raw = technology.get(
+            "csp_raw",
+            {}
+        )
+
+
+        # New format
+        if isinstance(csp_raw, dict):
+
+
+            csp_enabled = csp_raw.get(
+                "enabled",
+                False
+            )
+
+
+            csp_value = csp_raw.get(
+                "value"
+            )
+
+
+        # Backward compatibility
+        else:
+
+
+            csp_enabled = True
+
+            csp_value = csp_raw
+
+
+
+
+        if csp_enabled and csp_value:
+
+
+            profile[
+                "csp_intelligence"
+            ] = analyze_csp(
+
+                csp_value
+
+            )
+
+
+
+        else:
+
+
+            profile[
+                "csp_intelligence"
+            ] = {
+
+
+                "enabled": False,
+
+
+                "risk_level": "UNKNOWN",
+
+
+                "directives": {},
+
+
+                "trusted_domains": [],
+
+
+                "message":
+                "Content Security Policy not detected"
+
+
+            }
+
+
+
+
+    except Exception as e:
+
+
+        profile[
+            "csp_intelligence"
+        ] = {
+
+
+            "enabled": False,
+
+
+            "risk_level":"ERROR",
+
+
+            "error":str(e)
+
+        }
+
+
+
+
+    # ==================================
+    # Subdomain Discovery
+    # ==================================
+
+    subdomains = run_collector(
+
+        "Subdomain Discovery",
+
+        get_subdomains,
+
+        domain
+
+    )
+
+
+    profile[
+        "subdomain_intelligence"
+    ] = subdomains
+
+
+
+
+
+
+
+    # ==================================
+    # Subdomain Asset Enrichment
+    # ==================================
+
+    if (
+
+        isinstance(
+
+            subdomains,
+
+            dict
+
+        )
+
+        and
+
+        subdomains.get(
+            "subdomains"
+        )
+
+    ):
+
+
+        profile[
+            "subdomain_assets"
+        ] = run_collector(
+
+            "Subdomain Enrichment",
+
+            enrich_all_subdomains,
+
+            subdomains
+
+        )
+
+
+
+    else:
+
+
+        profile[
+            "subdomain_assets"
+        ] = {
+
+
+            "total_assets":0,
+
+
+            "assets":[]
+
+        }
+
+
+
+
+
+
+
+    # ==================================
+    # Risk Engine
+    # ==================================
+
+    profile[
+        "risk_assessment"
+    ] = run_collector(
+
+        "Risk Engine",
+
+        calculate_risk,
+
+        profile
+
+    )
+
+
+
+
+
+
+
+
+    # ==================================
+    # Asset Relationship Graph
+    # ==================================
+
+    profile[
+        "asset_graph"
+    ] = run_collector(
+
+        "Asset Graph",
+
+        create_asset_graph,
+
+        profile
+
+    )
+
+
+
+
+
+
+
+    # ==================================
+    # Attack Surface Summary
+    # ==================================
+
+    profile[
+        "attack_surface"
+    ] = build_attack_surface(
+
+        profile
+
+    )
+
+
+
+
+
+    profile[
+        "scan_metadata"
+    ][
+        "duration_seconds"
+    ] = round(
+
+        time.time()-start,
+
+        2
+
+    )
 
 
 
@@ -198,6 +764,14 @@ def generate_asset_profile(domain):
 
 
 
+
+
+
+
+
+# ==========================================
+# SAVE JSON REPORT
+# ==========================================
 
 
 def save_report(profile):
@@ -213,26 +787,19 @@ def save_report(profile):
 
 
 
-    domain = profile["asset"]
-
-
-    timestamp = datetime.now().strftime(
-
-        "%Y%m%d_%H%M%S"
-
-    )
-
-
-
     filename = (
 
-        f"{domain}_{timestamp}.json"
+        f"{profile['asset']}_"
+
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        ".json"
 
     )
 
 
 
-    filepath = os.path.join(
+    path = os.path.join(
 
         "reports",
 
@@ -242,14 +809,17 @@ def save_report(profile):
 
 
 
+
+
     with open(
 
-        filepath,
+        path,
 
-        "w"
+        "w",
+
+        encoding="utf-8"
 
     ) as file:
-
 
 
         json.dump(
@@ -264,26 +834,35 @@ def save_report(profile):
 
 
 
-    return filepath
+    return path
 
 
 
 
 
+
+
+
+
+
+
+# ==========================================
+# CLI TEST
+# ==========================================
 
 
 if __name__ == "__main__":
 
 
-    target=input(
+    target = input(
 
         "Enter target domain: "
 
-    )
+    ).strip().lower()
 
 
 
-    profile=generate_asset_profile(
+    result = generate_asset_profile(
 
         target
 
@@ -291,27 +870,30 @@ if __name__ == "__main__":
 
 
 
-    report=save_report(
+    report = save_report(
 
-        profile
+        result
 
     )
 
 
 
-    print("\n================================")
+
+    print("\n==============================")
 
     print(" SentinelX Security Report ")
 
-    print("================================")
+    print("==============================")
 
 
 
     print(
 
-        "\nRisk Score:",
+        "Risk:",
 
-        profile["risk_assessment"].get(
+        result[
+            "risk_assessment"
+        ].get(
 
             "risk_score"
 
@@ -325,7 +907,9 @@ if __name__ == "__main__":
 
         "Severity:",
 
-        profile["risk_assessment"].get(
+        result[
+            "risk_assessment"
+        ].get(
 
             "severity"
 
@@ -337,7 +921,89 @@ if __name__ == "__main__":
 
     print(
 
-        "\nReport saved:",
+        "Subdomains:",
+
+        result[
+            "attack_surface"
+        ].get(
+
+            "total_subdomains"
+
+        )
+
+    )
+
+
+
+    print(
+
+        "Assets:",
+
+        result[
+            "attack_surface"
+        ].get(
+
+            "resolved_assets"
+
+        )
+
+    )
+
+
+
+    print(
+
+        "Email Provider:",
+
+        result[
+            "attack_surface"
+        ].get(
+
+            "email_provider"
+
+        )
+
+    )
+
+
+
+    print(
+
+        "Email Risk:",
+
+        result[
+            "attack_surface"
+        ].get(
+
+            "email_risk"
+
+        )
+
+    )
+
+
+
+    print(
+
+        "Scan Time:",
+
+        result[
+            "scan_metadata"
+        ].get(
+
+            "duration_seconds"
+
+        ),
+
+        "seconds"
+
+    )
+
+
+
+    print(
+
+        "\nReport:",
 
         report
 

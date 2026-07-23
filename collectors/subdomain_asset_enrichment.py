@@ -1,19 +1,24 @@
-import requests
-import ssl
 import socket
+import ssl
+import requests
+import time
 
 from datetime import datetime
-from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 
+USER_AGENT = {
+    "User-Agent": "SentinelX-V2-ASM-Engine"
+}
 
 
-# ==============================
-# DNS
-# ==============================
 
-def resolve_subdomain(host):
+# =====================================================
+# DNS INTELLIGENCE
+# =====================================================
+
+def resolve_dns(host):
 
     result = {
 
@@ -21,18 +26,18 @@ def resolve_subdomain(host):
 
         "A": [],
 
-        "AAAA": []
+        "AAAA": [],
+
+        "CNAME": []
 
     }
 
 
+    # IPv4
+
     try:
 
-        answers = socket.gethostbyname_ex(
-            host
-        )
-
-        result["A"] = answers[2]
+        result["A"] = socket.gethostbyname_ex(host)[2]
 
 
     except Exception:
@@ -41,23 +46,39 @@ def resolve_subdomain(host):
 
 
 
+    # IPv6
+
     try:
 
-        infos = socket.getaddrinfo(
+        ipv6 = socket.getaddrinfo(
             host,
             None,
             socket.AF_INET6
         )
 
-
         result["AAAA"] = list(
             set(
-                [
-                    x[4][0]
-                    for x in infos
-                ]
+                x[4][0]
+                for x in ipv6
             )
         )
+
+
+    except Exception:
+
+        pass
+
+
+
+    # CNAME
+
+    try:
+
+        cname = socket.gethostbyname_ex(host)[0]
+
+        if cname != host:
+
+            result["CNAME"].append(cname)
 
 
     except Exception:
@@ -72,24 +93,31 @@ def resolve_subdomain(host):
 
 
 
-# ==============================
-# SSL
-# ==============================
+# =====================================================
+# SSL INTELLIGENCE
+# =====================================================
 
-def parse_cert_field(field):
+
+def parse_cert(data):
 
     output={}
 
 
-    for item in field:
+    try:
 
-        for key,value in item:
+        for item in data:
 
-            output[key]=value
+            for k,v in item:
+
+                output[k]=v
+
+
+    except Exception:
+
+        pass
 
 
     return output
-
 
 
 
@@ -104,47 +132,36 @@ def get_ssl_info(host):
     }
 
 
-
     try:
 
 
         context = ssl.create_default_context()
 
 
+        start=time.time()
+
 
         with socket.create_connection(
-
             (host,443),
-
             timeout=5
-
         ) as sock:
 
 
-
             with context.wrap_socket(
-
                 sock,
-
                 server_hostname=host
-
             ) as ssock:
-
 
 
                 cert=ssock.getpeercert()
 
 
-
                 result={
 
-
-                    "status":
-                    "VALID",
-
+                    "status":"VALID",
 
                     "issuer":
-                    parse_cert_field(
+                    parse_cert(
                         cert.get(
                             "issuer",
                             []
@@ -153,7 +170,7 @@ def get_ssl_info(host):
 
 
                     "subject":
-                    parse_cert_field(
+                    parse_cert(
                         cert.get(
                             "subject",
                             []
@@ -174,11 +191,16 @@ def get_ssl_info(host):
 
 
                     "tls_version":
-                    ssock.version()
+                    ssock.version(),
 
+
+                    "response_time":
+                    round(
+                        time.time()-start,
+                        3
+                    )
 
                 }
-
 
 
 
@@ -201,14 +223,12 @@ def get_ssl_info(host):
 
 
 
+# =====================================================
+# SECURITY HEADERS
+# =====================================================
 
-
-# ==============================
-# Security Headers
-# ==============================
 
 SECURITY_HEADERS=[
-
 
     "strict-transport-security",
 
@@ -227,11 +247,10 @@ SECURITY_HEADERS=[
 
 
 
-
 def analyze_headers(headers):
 
 
-    output={}
+    result={}
 
 
     lower={
@@ -243,60 +262,105 @@ def analyze_headers(headers):
     }
 
 
-    for header in SECURITY_HEADERS:
+
+    for h in SECURITY_HEADERS:
 
 
-        output[header]={
+        result[h]={
 
             "present":
-            header in lower,
+            h in lower,
 
 
             "value":
-            lower.get(header)
+            lower.get(h)
 
         }
 
 
 
-    return output
+    return result
+
+
+# =====================================================
+# TECHNOLOGY FINGERPRINTING
+# =====================================================
+
+
+def detect_technologies(headers, html):
+
+
+    technologies=[]
+
+
+    data = (
+        str(headers)
+        +
+        html
+    ).lower()
 
 
 
+    fingerprints={
 
 
-
-# ==============================
-# HTTP Intelligence
-# ==============================
-
-def get_http_info(host):
+        "Cloudflare":[
+            "cf-ray",
+            "cloudflare"
+        ],
 
 
-    result={
+        "Akamai":[
+            "akamai"
+        ],
 
 
-        "status_code":None,
-
-        "url":None,
-
-        "server":None,
-
-        "powered_by":None,
-
-        "technologies":[],
+        "Nginx":[
+            "nginx"
+        ],
 
 
-        "security_headers":{},
+        "Apache":[
+            "apache"
+        ],
 
 
-        "csp_raw":None,
+        "IIS":[
+            "microsoft-iis"
+        ],
 
 
-        "cookies":[],
+        "WordPress":[
+            "wp-content",
+            "wordpress"
+        ],
 
 
-        "raw_headers":{}
+        "React":[
+            "react",
+            "__react"
+        ],
+
+
+        "Next.js":[
+            "next.js",
+            "__next"
+        ],
+
+
+        "Vue.js":[
+            "vue"
+        ],
+
+
+        "Angular":[
+            "ng-version"
+        ],
+
+
+        "Bootstrap":[
+            "bootstrap"
+        ]
 
 
     }
@@ -304,159 +368,48 @@ def get_http_info(host):
 
 
 
+
+    for tech, signatures in fingerprints.items():
+
+
+        for sig in signatures:
+
+
+            if sig in data:
+
+
+                technologies.append({
+
+                    "name":tech,
+
+                    "evidence":sig
+
+                })
+
+
+                break
+
+
+
+    return technologies
+
+
+
+
+
+
+# =====================================================
+# COOKIE ANALYSIS
+# =====================================================
+
+
+def analyze_cookies(response):
+
+
+    cookies=[]
+
+
     try:
-
-
-        response=requests.get(
-
-
-            f"https://{host}",
-
-
-            timeout=8,
-
-
-            allow_redirects=True,
-
-
-            headers={
-
-                "User-Agent":
-                "SentinelX-V2"
-
-            }
-
-
-        )
-
-
-
-        headers=response.headers
-
-
-
-        result["status_code"]=(
-            response.status_code
-        )
-
-
-        result["url"]=(
-            response.url
-        )
-
-
-        result["server"]=(
-            headers.get(
-                "Server"
-            )
-        )
-
-
-        result["powered_by"]=(
-            headers.get(
-                "X-Powered-By"
-            )
-        )
-
-
-
-        result["raw_headers"]=dict(
-            headers
-        )
-
-
-
-        result["security_headers"]=(
-            analyze_headers(
-                headers
-            )
-        )
-
-
-
-        result["csp_raw"]=(
-            headers.get(
-                "Content-Security-Policy"
-            )
-        )
-
-
-
-
-
-        # Technology detection
-
-        tech=[]
-
-
-        header_string=str(
-            headers
-        ).lower()
-
-
-        html=response.text.lower()
-
-
-
-        fingerprints={
-
-
-            "Cloudflare":
-            "cloudflare",
-
-
-            "Akamai":
-            "akamai",
-
-
-            "Nginx":
-            "nginx",
-
-
-            "Apache":
-            "apache",
-
-
-            "WordPress":
-            "wordpress",
-
-
-            "React":
-            "react",
-
-
-            "Next.js":
-            "next.js"
-
-
-        }
-
-
-
-
-        for name,keyword in fingerprints.items():
-
-
-            if keyword in header_string or keyword in html:
-
-
-                tech.append(name)
-
-
-
-
-        result["technologies"]=list(
-            set(tech)
-        )
-
-
-
-
-
-        # Cookies
-
-
-        cookies=[]
 
 
         for cookie in response.cookies:
@@ -475,7 +428,9 @@ def get_http_info(host):
 
                 "httponly":
                 "httponly"
-                in str(cookie._rest).lower(),
+                in str(
+                    cookie._rest
+                ).lower(),
 
 
                 "samesite":
@@ -486,133 +441,329 @@ def get_http_info(host):
             })
 
 
+    except Exception:
 
-        result["cookies"]=cookies
+        pass
 
 
 
+    return cookies
 
-        # WAF Detection
 
-        if any(
 
-            x in header_string
 
-            for x in [
 
-                "cloudflare",
+# =====================================================
+# WAF DETECTION
+# =====================================================
 
-                "akamai",
 
-                "imperva",
+def detect_waf(headers):
 
-                "sucuri"
 
-            ]
+    data=str(
+        headers
+    ).lower()
 
-        ):
 
 
-            result["waf"]={
+    waf_signatures={
 
 
-                "detected":True,
+        "Cloudflare":[
+            "cf-ray",
+            "cloudflare"
+        ],
 
 
-                "type":
-                "Possible WAF/CDN"
+        "Akamai":[
+            "akamai"
+        ],
 
 
-            }
+        "Imperva":[
+            "imperva"
+        ],
 
 
-        else:
+        "Sucuri":[
+            "sucuri"
+        ]
 
+    }
 
-            result["waf"]={
 
 
-                "detected":False
+    for name,signatures in waf_signatures.items():
 
-            }
 
+        for sig in signatures:
 
 
+            if sig in data:
 
-    except Exception as e:
 
+                return {
 
-        result["error"]=str(e)
+                    "detected":True,
 
+                    "provider":name
 
+                }
 
 
-    return result
 
+    return {
 
 
+        "detected":False
 
+    }
 
 
 
-# ==============================
-# Risk
-# ==============================
 
-def calculate_subdomain_risk(asset):
 
+# =====================================================
+# HTTP INTELLIGENCE
+# =====================================================
 
-    score=0
 
+def get_http_info(host):
 
-    findings=[]
 
+    result={
 
-    host=asset["host"].lower()
 
+        "reachable":False,
 
+        "url":None,
 
-    sensitive=[
+        "status_code":None,
 
-        "admin",
+        "response_time":None,
 
-        "dev",
+        "server":None,
 
-        "test",
+        "powered_by":None,
 
-        "staging",
+        "technologies":[],
 
-        "backup",
+        "security_headers":{},
 
-        "vpn",
+        "csp_raw":None,
 
-        "internal",
+        "cookies":[],
 
-        "old"
+        "waf":{},
+
+        "headers":{}
+
+    }
+
+
+
+
+
+    urls=[
+
+        f"https://{host}",
+
+        f"http://{host}"
 
     ]
 
 
 
-    for word in sensitive:
 
 
-        if word in host:
+    for url in urls:
 
 
-            score+=10
+        try:
+
+
+            start=time.time()
+
+
+
+            response=requests.get(
+
+                url,
+
+                timeout=8,
+
+                allow_redirects=True,
+
+                headers=USER_AGENT,
+
+                verify=False
+
+            )
+
+
+
+            elapsed=round(
+
+                time.time()-start,
+
+                3
+
+            )
+
+
+
+            headers=response.headers
+
+
+
+            html=response.text[:500000].lower()
+
+
+
+            result.update({
+
+
+                "reachable":True,
+
+
+                "url":
+                response.url,
+
+
+                "status_code":
+                response.status_code,
+
+
+                "response_time":
+                elapsed,
+
+
+                "server":
+                headers.get(
+                    "Server"
+                ),
+
+
+                "powered_by":
+                headers.get(
+                    "X-Powered-By"
+                ),
+
+
+                "headers":
+                dict(headers),
+
+
+                "security_headers":
+                analyze_headers(
+                    headers
+                ),
+
+
+                "csp_raw":
+                headers.get(
+                    "Content-Security-Policy"
+                ),
+
+
+                "cookies":
+                analyze_cookies(
+                    response
+                ),
+
+
+                "technologies":
+                detect_technologies(
+                    headers,
+                    html
+                ),
+
+
+                "waf":
+                detect_waf(
+                    headers
+                )
+
+
+            })
+
+
+
+            return result
+
+
+
+        except Exception:
+
+
+            continue
+
+
+
+
+    result["error"]="HTTP unreachable"
+
+
+    return result
+
+
+# =====================================================
+# RISK ENGINE V2
+# =====================================================
+
+
+def calculate_risk(asset):
+
+
+    score = 0
+
+    findings = []
+
+
+
+    host = asset["host"].lower()
+
+
+
+    # Sensitive asset names
+
+    sensitive_keywords = [
+
+        "admin",
+        "administrator",
+        "dev",
+        "development",
+        "test",
+        "staging",
+        "stage",
+        "backup",
+        "old",
+        "vpn",
+        "internal",
+        "portal",
+        "login"
+
+    ]
+
+
+
+    for keyword in sensitive_keywords:
+
+
+        if keyword in host:
+
+
+            score += 10
 
 
             findings.append({
 
-
                 "issue":
-                f"Sensitive hostname keyword: {word}",
-
+                f"Sensitive hostname detected: {keyword}",
 
                 "severity":
                 "MEDIUM"
-
 
             })
 
@@ -620,59 +771,136 @@ def calculate_subdomain_risk(asset):
 
 
 
+    # SSL
+
     if asset["ssl"].get(
         "status"
     ) != "VALID":
 
 
-        score+=20
+        score += 20
 
 
         findings.append({
 
-
             "issue":
-            "Invalid SSL certificate",
-
+            "SSL certificate invalid or unavailable",
 
             "severity":
             "HIGH"
 
-
         })
 
 
 
 
 
+    # HTTP exposure
+
+
     if asset["http"].get(
-        "security_headers",
+        "reachable"
+    ):
+
+
+        headers = asset["http"].get(
+            "security_headers",
+            {}
+        )
+
+
+        if not headers.get(
+            "strict-transport-security",
+            {}
+        ).get(
+            "present"
+        ):
+
+
+            score += 10
+
+
+            findings.append({
+
+                "issue":
+                "Missing HSTS header",
+
+                "severity":
+                "LOW"
+
+            })
+
+
+
+
+        if not headers.get(
+            "content-security-policy",
+            {}
+        ).get(
+            "present"
+        ):
+
+
+            score += 10
+
+
+            findings.append({
+
+                "issue":
+                "Missing Content Security Policy",
+
+                "severity":
+                "LOW"
+
+            })
+
+
+
+
+
+    # WAF absence
+
+
+    if asset["http"].get(
+        "waf",
         {}
     ).get(
-        "content-security-policy",
-        {}
-    ).get(
-        "present"
+        "detected"
     ) == False:
 
 
-        score+=10
+        score += 5
 
 
         findings.append({
 
-
             "issue":
-            "Missing Content Security Policy",
-
+            "No WAF/CDN detected",
 
             "severity":
-            "LOW"
-
+            "INFO"
 
         })
 
 
+
+
+
+    if score >= 50:
+
+        severity="CRITICAL"
+
+    elif score >=35:
+
+        severity="HIGH"
+
+    elif score >=20:
+
+        severity="MEDIUM"
+
+    else:
+
+        severity="LOW"
 
 
 
@@ -683,22 +911,11 @@ def calculate_subdomain_risk(asset):
         "score":score,
 
 
-        "severity":
-
-            "HIGH"
-            if score>=40
-
-            else
-
-            "MEDIUM"
-            if score>=20
-
-            else
-
-            "LOW",
+        "severity":severity,
 
 
         "findings":findings
+
 
     }
 
@@ -708,9 +925,10 @@ def calculate_subdomain_risk(asset):
 
 
 
-# ==============================
-# Main Enrichment
-# ==============================
+# =====================================================
+# SINGLE ASSET ENRICHMENT
+# =====================================================
+
 
 def enrich_subdomain(host):
 
@@ -722,7 +940,9 @@ def enrich_subdomain(host):
 
 
         "timestamp":
-        datetime.utcnow().isoformat(),
+        datetime.utcnow().isoformat()
+        +"Z",
+
 
 
         "dns":{},
@@ -741,46 +961,39 @@ def enrich_subdomain(host):
 
 
 
-
     print(
-        "[+] DNS"
+        f"[+] Scanning {host}"
     )
 
 
-    asset["dns"]=resolve_subdomain(
+
+    # DNS
+
+    asset["dns"] = resolve_dns(
         host
     )
 
 
 
-    print(
-        "[+] SSL"
-    )
+    # SSL
 
-
-    asset["ssl"]=get_ssl_info(
+    asset["ssl"] = get_ssl_info(
         host
     )
 
 
 
-    print(
-        "[+] HTTP Technology"
-    )
+    # HTTP
 
-
-    asset["http"]=get_http_info(
+    asset["http"] = get_http_info(
         host
     )
 
 
 
-    print(
-        "[+] Risk"
-    )
+    # Risk
 
-
-    asset["risk"]=calculate_subdomain_risk(
+    asset["risk"] = calculate_risk(
         asset
     )
 
@@ -790,44 +1003,102 @@ def enrich_subdomain(host):
 
 
 
+
+
+
+
+# =====================================================
+# PARALLEL SCANNER
+# =====================================================
+
+
 def enrich_all_subdomains(subdomain_result):
 
 
     assets=[]
 
 
-    for item in subdomain_result["subdomains"]:
+    hosts=[
+
+        item["host"]
+
+        for item
+
+        in subdomain_result.get(
+            "subdomains",
+            []
+        )
+
+    ]
 
 
-        host=item["host"]
 
 
-        try:
-
-            print(
-                f"\n========== {host} =========="
-            )
+    print(
+        f"[+] Starting enrichment for {len(hosts)} assets"
+    )
 
 
-            asset=enrich_subdomain(
+
+    with ThreadPoolExecutor(
+        max_workers=10
+    ) as executor:
+
+
+
+        jobs={
+
+            executor.submit(
+                enrich_subdomain,
                 host
-            )
+            ):host
+
+            for host in hosts
+
+        }
 
 
-            assets.append(asset)
+
+
+        for future in as_completed(jobs):
+
+
+            host=jobs[future]
+
+
+            try:
+
+
+                assets.append(
+                    future.result()
+                )
 
 
 
-        except Exception as e:
+            except Exception as e:
 
 
-            assets.append({
+                assets.append({
 
-                "host":host,
+                    "host":host,
 
-                "error":str(e)
+                    "error":str(e)
 
-            })
+                })
+
+
+
+
+
+    assets.sort(
+
+        key=lambda x:
+        x.get(
+            "host",
+            ""
+        )
+
+    )
 
 
 
@@ -835,15 +1106,21 @@ def enrich_all_subdomains(subdomain_result):
 
 
         "domain":
-        subdomain_result["domain"],
+        subdomain_result.get(
+            "domain"
+        ),
+
 
 
         "timestamp":
-        datetime.utcnow().isoformat(),
+        datetime.utcnow().isoformat()
+        +"Z",
+
 
 
         "total_assets":
         len(assets),
+
 
 
         "assets":
@@ -853,7 +1130,17 @@ def enrich_all_subdomains(subdomain_result):
 
 
 
-if __name__=="__main__":
+
+
+
+
+
+# =====================================================
+# TEST MODE
+# =====================================================
+
+
+if __name__ == "__main__":
 
 
     target=input(
@@ -868,4 +1155,12 @@ if __name__=="__main__":
 
 
 
-    print(result)
+    import json
+
+
+    print(
+        json.dumps(
+            result,
+            indent=4
+        )
+    )

@@ -4,9 +4,14 @@ import re
 
 
 USER_AGENT = {
-    "User-Agent": "SentinelX-V2 Subdomain Intelligence Engine"
+    "User-Agent": "SentinelX-ASM-Engine/2.0"
 }
 
+
+CRT_ENDPOINTS = [
+    "https://crt.sh/?q=%25.{domain}&output=json",
+    "https://crt.sh/?q={domain}&output=json"
+]
 
 
 def clean_hostname(name, domain):
@@ -22,55 +27,133 @@ def clean_hostname(name, domain):
     )
 
 
-    # remove wildcard
-    name = name.replace(
-        "*.",
-        ""
-    )
+    # Remove wildcard
+    name = name.replace("*.", "")
 
 
-    # remove emails
-    if "@" in name:
+    # Remove invalid entries
+    if (
+        "@" in name
+        or " "
+        in name
+    ):
         return None
 
 
-    # remove spaces
-    if " " in name:
-        return None
-
-
-
-    # must belong to target domain
+    # Must belong to target domain
 
     if not name.endswith(domain):
-
         return None
 
 
-
-    # ignore root
+    # Remove root domain
 
     if name == domain:
-
         return None
 
 
 
-    pattern = (
-        r"^[a-z0-9.-]+\.[a-z]{2,}$"
+    hostname_regex = (
+        r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$"
     )
 
 
     if not re.match(
-        pattern,
+        hostname_regex,
         name
     ):
-
         return None
 
 
-
     return name
+
+
+
+
+
+def request_crt(url):
+
+
+    session = requests.Session()
+
+    session.headers.update(
+        USER_AGENT
+    )
+
+
+    retries = 4
+
+
+    for attempt in range(retries):
+
+        try:
+
+
+            response = session.get(
+
+                url,
+
+                timeout=15
+
+            )
+
+
+            if response.status_code == 200:
+
+
+                try:
+
+                    return response.json()
+
+                except Exception:
+
+                    print(
+                        "[CRT] Invalid JSON response"
+                    )
+
+                    return []
+
+
+
+            else:
+
+
+                print(
+                    f"[CRT] HTTP {response.status_code}"
+                )
+
+
+
+        except requests.exceptions.Timeout:
+
+
+            print(
+                f"[CRT] Timeout attempt {attempt+1}/{retries}"
+            )
+
+
+
+        except requests.exceptions.RequestException as e:
+
+
+            print(
+                "[CRT NETWORK]",
+                e
+            )
+
+
+
+        # exponential backoff
+
+        time.sleep(
+            2 ** attempt
+        )
+
+
+
+    return []
+
+
 
 
 
@@ -80,122 +163,67 @@ def clean_hostname(name, domain):
 def query_crtsh(domain):
 
 
-    results=set()
-
-
-    urls=[
-
-
-        # wildcard search
-
-        f"https://crt.sh/?q=%25.{domain}&output=json",
-
-
-        # normal search
-
-        f"https://crt.sh/?q={domain}&output=json"
-
-    ]
+    discovered=set()
 
 
 
-    for url in urls:
+    for endpoint in CRT_ENDPOINTS:
 
 
-        for attempt in range(3):
+        url = endpoint.format(
+            domain=domain
+        )
 
-            try:
+
+        print(
+            "[CRT] Query:",
+            url
+        )
 
 
-                response=requests.get(
 
-                    url,
+        data=request_crt(url)
 
-                    headers=USER_AGENT,
 
-                    timeout=20
+
+        if not data:
+
+            continue
+
+
+
+        for certificate in data:
+
+
+            names = certificate.get(
+                "name_value",
+                ""
+            )
+
+
+            for name in names.split("\n"):
+
+
+                host = clean_hostname(
+
+                    name,
+
+                    domain
 
                 )
 
 
+                if host:
 
-                if response.status_code != 200:
-
-
-                    print(
-                        f"[CRT] HTTP {response.status_code} retry {attempt+1}"
-                    )
-
-
-                    time.sleep(3)
-
-                    continue
-
-
-
-
-                data=response.json()
-
-
-
-                for cert in data:
-
-
-                    names = cert.get(
-                        "name_value",
-                        ""
+                    discovered.add(
+                        host
                     )
 
 
 
-                    for name in names.split("\n"):
+    return discovered
 
 
-                        clean = clean_hostname(
-
-                            name,
-
-                            domain
-
-                        )
-
-
-                        if clean:
-
-                            results.add(
-                                clean
-                            )
-
-
-
-                return results
-
-
-
-            except requests.exceptions.RequestException as e:
-
-
-                print(
-                    "[CRT NETWORK]",
-                    e
-                )
-
-
-                time.sleep(3)
-
-
-
-            except Exception as e:
-
-
-                print(
-                    "[CRT ERROR]",
-                    e
-                )
-
-
-
-    return results
 
 
 
@@ -211,7 +239,7 @@ def get_ct_subdomains(domain):
     )
 
 
-    results = query_crtsh(
+    results=query_crtsh(
         domain
     )
 
@@ -222,6 +250,7 @@ def get_ct_subdomains(domain):
     )
 
 
+
     return results
 
 
@@ -230,7 +259,7 @@ def get_ct_subdomains(domain):
 
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
 
 
     target=input(
@@ -239,15 +268,23 @@ if __name__=="__main__":
 
 
 
-    subs=get_ct_subdomains(
+    results=get_ct_subdomains(
         target
     )
 
 
+    print(
+        "\n========== RESULTS ==========\n"
+    )
 
-    print("\nFound:\n")
+
+    for host in sorted(results):
+
+        print(host)
 
 
-    for sub in sorted(subs):
 
-        print(sub)
+    print(
+        "\nTotal:",
+        len(results)
+    )

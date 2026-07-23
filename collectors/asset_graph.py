@@ -1,294 +1,602 @@
+
+import uuid
 from datetime import datetime
 
 
 
+# ==========================================
+# NODE CREATOR
+# ==========================================
 
-def create_asset_graph(profile):
+def create_node(
+        node_type,
+        name,
+        properties=None
+):
+
+    return {
+
+        "id":
+        str(uuid.uuid4()),
 
 
-    graph = {
+        "type":
+        node_type,
 
-        "timestamp":
-        datetime.utcnow().isoformat(),
 
-        "nodes":[],
+        "name":
+        name,
 
-        "edges":[]
+
+        "properties":
+        properties or {}
 
     }
 
 
 
-    def add_node(node_id,node_type):
 
 
-        graph["nodes"].append({
+# ==========================================
+# EDGE CREATOR
+# ==========================================
 
-            "id":node_id,
+def create_edge(
+        source,
+        target,
+        relation
+):
 
-            "type":node_type
-
-        })
-
-
-
-    def add_edge(source,target,relation):
-
-
-        graph["edges"].append({
-
-            "source":source,
-
-            "target":target,
-
-            "relationship":relation
-
-        })
+    return {
 
 
+        "source":
+        source,
 
 
-    domain = profile["asset"]
+        "target":
+        target,
+
+
+        "relation":
+        relation
+
+
+    }
 
 
 
-    # Main domain
 
-    add_node(
+
+# ==========================================
+# ASSET GRAPH ENGINE
+# ==========================================
+
+def create_asset_graph(profile):
+
+
+    nodes=[]
+
+    edges=[]
+
+
+
+    # ======================================
+    # Organization Root
+    # ======================================
+
+
+    domain = profile.get(
+        "asset"
+    )
+
+
+    org_node=create_node(
+
+        "Organization",
+
+        domain
+
+    )
+
+
+    nodes.append(org_node)
+
+
+
+
+
+    # ======================================
+    # Domain
+    # ======================================
+
+
+    domain_node=create_node(
+
+        "Domain",
 
         domain,
 
-        "domain"
+        profile.get(
+            "domain_intelligence",
+            {}
+        )
+
+    )
+
+
+    nodes.append(domain_node)
+
+
+
+    edges.append(
+
+        create_edge(
+
+            org_node["id"],
+
+            domain_node["id"],
+
+            "owns"
+
+        )
 
     )
 
 
 
 
-    #
-    # IP relationships
-    #
 
-    ips = profile.get(
-        "domain_intelligence",
-        {}
-    ).get(
-        "ip_addresses",
-        []
-    )
+    # ======================================
+    # DNS
+    # ======================================
 
 
-    for ip in ips:
+    dns=profile.get(
 
-
-        add_node(
-
-            ip,
-
-            "ip"
-
-        )
-
-
-        add_edge(
-
-            domain,
-
-            ip,
-
-            "resolves_to"
-
-        )
-
-
-
-
-
-    #
-    # Subdomains
-    #
-
-    subdomains = profile.get(
-
-        "subdomain_intelligence",
+        "dns_intelligence",
 
         {}
 
-    ).get(
-
-        "subdomains",
-
-        []
-
     )
 
 
+    for ip in dns.get(
+        "A",
+        []
+    ):
 
 
-    for sub in subdomains:
+        ip_node=create_node(
 
+            "IPv4",
 
-        host=sub.get(
-            "host"
+            ip
+
         )
 
 
-        if host:
+        nodes.append(ip_node)
 
 
-            add_node(
 
-                host,
+        edges.append(
 
-                "subdomain"
+            create_edge(
+
+                domain_node["id"],
+
+                ip_node["id"],
+
+                "resolves_to"
 
             )
 
+        )
 
-            add_edge(
 
-                domain,
 
-                host,
+
+
+    # ======================================
+    # SSL Certificate
+    # ======================================
+
+
+    ssl=profile.get(
+
+        "ssl_intelligence",
+
+        {}
+
+    )
+
+
+    if ssl:
+
+
+        cert_node=create_node(
+
+            "Certificate",
+
+            ssl.get(
+                "issuer",
+                "Unknown"
+            ),
+
+            ssl
+
+        )
+
+
+        nodes.append(cert_node)
+
+
+
+        edges.append(
+
+            create_edge(
+
+                domain_node["id"],
+
+                cert_node["id"],
+
+                "uses_certificate"
+
+            )
+
+        )
+
+
+
+
+
+
+
+    # ======================================
+    # Technologies
+    # ======================================
+
+
+    technologies=profile.get(
+
+        "technology_intelligence",
+
+        {}
+
+    ).get(
+
+        "technologies",
+
+        []
+
+    )
+
+
+
+
+    for tech in technologies:
+
+
+        tech_node=create_node(
+
+            "Technology",
+
+            tech
+
+        )
+
+
+        nodes.append(tech_node)
+
+
+
+        edges.append(
+
+            create_edge(
+
+                domain_node["id"],
+
+                tech_node["id"],
+
+                "runs"
+
+            )
+
+        )
+
+
+
+
+
+
+
+    # ======================================
+    # Subdomains
+    # ======================================
+
+
+    assets=profile.get(
+
+        "subdomain_assets",
+
+        {}
+
+    ).get(
+
+        "assets",
+
+        []
+
+    )
+
+
+
+
+
+    for asset in assets:
+
+
+        host=asset.get(
+
+            "host"
+
+        )
+
+
+
+        sub_node=create_node(
+
+            "Subdomain",
+
+            host,
+
+            {
+
+                "risk":
+                asset.get(
+                    "risk",
+                    {}
+                ),
+
+                "dns":
+                asset.get(
+                    "dns",
+                    {}
+                )
+
+            }
+
+        )
+
+
+        nodes.append(sub_node)
+
+
+
+        edges.append(
+
+            create_edge(
+
+                domain_node["id"],
+
+                sub_node["id"],
 
                 "contains"
 
             )
 
+        )
 
 
-            for ip in sub.get(
-                "A",
-                []
-            ):
 
 
-                add_node(
-
-                    ip,
-
-                    "ip"
-
-                )
+        # IP relationship
 
 
-                add_edge(
+        for ip in asset.get(
 
-                    host,
+            "dns",
 
-                    ip,
+            {}
+
+        ).get(
+
+            "A",
+
+            []
+
+        ):
+
+
+            ip_node=create_node(
+
+                "IPv4",
+
+                ip
+
+            )
+
+
+            nodes.append(ip_node)
+
+
+
+            edges.append(
+
+                create_edge(
+
+                    sub_node["id"],
+
+                    ip_node["id"],
 
                     "resolves_to"
 
                 )
 
+            )
 
 
 
 
-    #
-    # Technology
-    #
 
-    tech = profile.get(
+        # Technology relationship
 
-        "technology_intelligence",
+
+        for tech in asset.get(
+
+            "http",
+
+            {}
+
+        ).get(
+
+            "technologies",
+
+            []
+
+        ):
+
+
+            tech_node=create_node(
+
+                "Technology",
+
+                tech
+
+            )
+
+
+            nodes.append(tech_node)
+
+
+
+            edges.append(
+
+                create_edge(
+
+                    sub_node["id"],
+
+                    tech_node["id"],
+
+                    "uses"
+
+                )
+
+            )
+
+
+
+
+
+
+
+    # ======================================
+    # Risk Node
+    # ======================================
+
+
+    risk=profile.get(
+
+        "risk_assessment",
 
         {}
 
-    ).get(
+    )
 
-        "technology",
 
-        {}
+    risk_node=create_node(
 
-    ).get(
+        "Risk",
 
-        "detected_frameworks",
+        "Security Risk",
 
-        []
+        risk
+
+    )
+
+
+    nodes.append(risk_node)
+
+
+
+    edges.append(
+
+        create_edge(
+
+            domain_node["id"],
+
+            risk_node["id"],
+
+            "has_risk"
+
+        )
 
     )
 
 
 
-    for item in tech:
-
-
-        add_node(
-
-            item,
-
-            "technology"
-
-        )
-
-
-        add_edge(
-
-            domain,
-
-            item,
-
-            "uses"
-
-        )
 
 
 
 
-    #
-    # WAF/CDN
-    #
-
-    protection = profile.get(
-
-        "technology_intelligence",
-
-        {}
-
-    ).get(
-
-        "protection",
-
-        {})
+    return {
 
 
-
-    if protection.get(
-
-        "detected"
-
-    ):
+        "graph_metadata":{
 
 
-        waf = protection.get(
+            "engine":
 
-            "type"
-
-        )
+            "SentinelX Asset Graph Engine",
 
 
-        add_node(
+            "version":
 
-            waf,
-
-            "security_layer"
-
-        )
+            "1.0",
 
 
-        add_edge(
+            "created":
 
-            domain,
+            datetime.utcnow().isoformat()+"Z"
 
-            waf,
 
-            "protected_by"
+        },
 
-        )
 
+        "nodes":
+
+        nodes,
+
+
+        "edges":
+
+        edges,
+
+
+        "statistics":{
+
+
+            "nodes":
+
+            len(nodes),
+
+
+            "edges":
+
+            len(edges)
+
+        }
+
+    }
 
 
 
-    return graph
+
+
+
+if __name__=="__main__":
+
+    print(
+        "SentinelX Asset Graph Engine v1 Loaded"
+    )
